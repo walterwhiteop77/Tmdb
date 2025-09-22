@@ -88,12 +88,16 @@ class BotRunner:
             logger.info("Starting bot...")
             self.running = True
             
-            # Run the bot
-            await self.application.run_polling(
-                allowed_updates=Update.ALL_TYPES,
-                drop_pending_updates=True,
-                close_loop=False
-            )
+            # Initialize the application
+            await self.application.initialize()
+            await self.application.start()
+            
+            # Start the updater
+            await self.application.updater.start_polling(drop_pending_updates=True)
+            
+            # Keep running until stopped
+            while self.running:
+                await asyncio.sleep(1)
             
         except Exception as e:
             logger.error(f"Error starting bot: {e}")
@@ -107,6 +111,8 @@ class BotRunner:
         
         if self.application:
             try:
+                if self.application.updater.running:
+                    await self.application.updater.stop()
                 await self.application.stop()
                 await self.application.shutdown()
             except Exception as e:
@@ -121,9 +127,7 @@ class BotRunner:
     def signal_handler(self, signum, frame):
         """Handle shutdown signals."""
         logger.info(f"Received signal {signum}")
-        if self.running:
-            asyncio.create_task(self.cleanup())
-            sys.exit(0)
+        self.running = False
 
 async def main():
     """Main function."""
