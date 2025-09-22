@@ -4,6 +4,8 @@ import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from aiohttp import web
+import signal
+import sys
 
 from config.settings import SETTINGS
 from config.database import init_database
@@ -19,82 +21,131 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-async def health_check(request):
-    """Health check endpoint for Render."""
-    return web.Response(text="Bot is running!", status=200)
+class BotRunner:
+    def __init__(self):
+        self.application = None
+        self.web_runner = None
+        self.running = False
 
-async def start_web_server():
-    """Start a simple web server for health checks."""
-    app = web.Application()
-    app.router.add_get('/health', health_check)
-    app.router.add_get('/', health_check)
-    
-    runner = web.AppRunner(app)
-    await runner.setup()
-    
-    port = int(os.environ.get("PORT", 8000))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    logger.info(f"Web server started on port {port}")
-    
-    return runner
+    async def health_check(self, request):
+        """Health check endpoint for Render."""
+        return web.Response(text="Bot is running!", status=200)
 
-async def main():
-    """Main function to run the bot."""
-    web_runner = None
-    try:
-        # Initialize database
-        await init_database()
+    async def start_web_server(self):
+        """Start a simple web server for health checks."""
+        app = web.Application()
+        app.router.add_get('/health', self.health_check)
+        app.router.add_get('/', self.health_check)
         
-        # Start web server for health checks
-        web_runner = await start_web_server()
+        runner = web.AppRunner(app)
+        await runner.setup()
         
+        port = int(os.environ.get("PORT", 8000))
+        site = web.TCPSite(runner, "0.0.0.0", port)
+        await site.start()
+        logger.info(f"Web server started on port {port}")
+        
+        return runner
+
+    async def setup_bot(self):
+        """Set up the bot application."""
         # Create application
-        application = Application.builder().token(SETTINGS.BOT_TOKEN).build()
+        self.application = Application.builder().token(SETTINGS.BOT_TOKEN).build()
         
         # Command handlers
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("help", help_command))
-        application.add_handler(CommandHandler("status", admin_only(status)))
+        self.application.add_handler(CommandHandler("start", start))
+        self.application.add_handler(CommandHandler("help", help_command))
+        self.application.add_handler(CommandHandler("status", admin_only(status)))
         
         # Admin command handlers
-        application.add_handler(CommandHandler("setcaption", admin_only(set_caption)))
-        application.add_handler(CommandHandler("landscape", admin_only(set_landscape)))
-        application.add_handler(CommandHandler("setlandcaption", admin_only(set_landscape_caption)))
-        application.add_handler(CommandHandler("template", admin_only(view_templates)))
+        self.application.add_handler(CommandHandler("setcaption", admin_only(set_caption)))
+        self.application.add_handler(CommandHandler("landscape", admin_only(set_landscape)))
+        self.application.add_handler(CommandHandler("setlandcaption", admin_only(set_landscape_caption)))
+        self.application.add_handler(CommandHandler("template", admin_only(view_templates)))
         
         # Message handler for movie/TV show requests
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_movie_request))
+        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_movie_request))
         
         # Error handler
         async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Update {update} caused error {context.error}")
         
-        application.add_error_handler(error_handler)
-        
-        # Start the bot
-        logger.info("Starting bot...")
-        
-        # Initialize and start polling
-        await application.initialize()
-        await application.start()
-        
-        # Start polling
-        await application.updater.start_polling(drop_pending_updates=True)
-        
-        # Keep the application running
-        await application.updater.idle()
+        self.application.add_error_handler(error_handler)
+
+    async def start(self):
+        """Start the bot and web server."""
+        try:
+            # Initialize database
+            await init_database()
             
+            # Start web server for health checks
+            self.web_runner = await self.start_web_server()
+            
+            # Setup bot
+            await self.setup_bot()
+            
+            # Start the bot
+            logger.info("Starting bot...")
+            self.running = True
+            
+            # Run the bot
+            await self.application.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True,
+                close_loop=False
+            )
+            
+        except Exception as e:
+            logger.error(f"Error starting bot: {e}")
+            await self.cleanup()
+            raise
+
+    async def cleanup(self):
+        """Cleanup resources."""
+        logger.info("Cleaning up...")
+        self.running = False
+        
+        if self.application:
+            try:
+                await self.application.stop()
+                await self.application.shutdown()
+            except Exception as e:
+                logger.error(f"Error stopping application: {e}")
+        
+        if self.web_runner:
+            try:
+                await self.web_runner.cleanup()
+            except Exception as e:
+                logger.error(f"Error cleaning up web runner: {e}")
+
+    def signal_handler(self, signum, frame):
+        """Handle shutdown signals."""
+        logger.info(f"Received signal {signum}")
+        if self.running:
+            asyncio.create_task(self.cleanup())
+            sys.exit(0)
+
+async def main():
+    """Main function."""
+    bot_runner = BotRunner()
+    
+    # Set up signal handlers
+    signal.signal(signal.SIGTERM, bot_runner.signal_handler)
+    signal.signal(signal.SIGINT, bot_runner.signal_handler)
+    
+    try:
+        await bot_runner.start()
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
     except Exception as e:
-        logger.error(f"Error starting bot: {e}")
-        raise
+        logger.error(f"Bot crashed: {e}")
     finally:
-        # Cleanup
-        if web_runner:
-            await web_runner.cleanup()
-        if 'application' in locals():
-            await application.stop()
-            await application.shutdown()
+        await bot_runner.cleanup()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped")
+    except Exception as e:
+        logger.error(f"Failed to start bot: {e}")
