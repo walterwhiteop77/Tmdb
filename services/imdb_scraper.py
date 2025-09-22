@@ -78,78 +78,7 @@ class IMDbScraper:
             if not href.startswith('/title/'):
                 continue
             
-            # Cast
-            cast_section = soup.find('section', {'data-testid': 'title-cast'})
-            if cast_section:
-                cast_links = cast_section.find_all('a', href=re.compile(r'/name/'))
-                cast_names = []
-                for link in cast_links[:5]:  # Top 5 cast members
-                    name = link.get_text().strip()
-                    if name and name not in cast_names:
-                        cast_names.append(name)
-                data["cast"] = ", ".join(cast_names) if cast_names else "N/A"
-            else:
-                data["cast"] = "N/A"
-            
-            # Language
-            lang_elem = soup.find('li', {'data-testid': 'title-details-languages'})
-            if lang_elem:
-                lang_links = lang_elem.find_all('a')
-                languages = [link.get_text().strip() for link in lang_links]
-                data["language"] = ", ".join(languages) if languages else "N/A"
-            else:
-                data["language"] = "N/A"
-            
-            # Determine type (movie/tv)
-            type_indicators = soup.find_all(string=re.compile(r'TV Series|TV Mini Series|TV Movie'))
-            if type_indicators:
-                data["type"] = "tv"
-                
-                # For TV shows, try to get season/episode info if available
-                episodes_elem = soup.find('span', string=re.compile(r'\d+ episodes'))
-                if episodes_elem:
-                    episodes_match = re.search(r'(\d+) episodes', episodes_elem)
-                    if episodes_match:
-                        data["episodes"] = episodes_match.group(1)
-            else:
-                data["type"] = "movie"
-            
-            # Poster image
-            poster_img = soup.find('img', {'data-testid': 'hero-media__poster'})
-            if poster_img:
-                poster_src = poster_img.get('src')
-                if poster_src:
-                    # Clean up IMDb image URL to get higher resolution
-                    poster_src = re.sub(r'UX\d+_CR\d+,\d+,\d+,\d+_AL_', 'UX500_CR0,0,500,750_AL_', poster_src)
-                    data["poster_url"] = poster_src
-            
-            # Cache the result
-            await cache_movie_data(cache_key, {"data": data})
-            return data
-            
-        except Exception as e:
-            logger.error(f"Error parsing IMDb data for {imdb_id}: {e}")
-            return None
-            
-        except Exception as e:
-            logger.error(f"Error parsing IMDb data for {imdb_id}: {e}")
-            return None
-    
-    async def search_and_get_details(self, title: str, year: Optional[int] = None) -> Optional[Dict]:
-        """Search for a title and get its details in one call."""
-        imdb_id = await self.search_title(title, year)
-        if not imdb_id:
-            return None
-        
-        return await self.get_title_details(imdb_id)
-    
-    async def close(self):
-        """Close the aiohttp session."""
-        if self.session:
-            await self.session.close()
-
-# Global IMDb scraper instance
-imdb_scraper = IMDbScraper() Extract IMDb ID
+            # Extract IMDb ID
             imdb_id = re.search(r'/title/(tt\d+)/', href)
             if not imdb_id:
                 continue
@@ -247,4 +176,71 @@ imdb_scraper = IMDbScraper() Extract IMDb ID
             else:
                 data["director"] = "N/A"
             
-            #
+            # Cast
+            cast_section = soup.find('section', {'data-testid': 'title-cast'})
+            if cast_section:
+                cast_links = cast_section.find_all('a', href=re.compile(r'/name/'))
+                cast_names = []
+                for link in cast_links[:5]:  # Top 5 cast members
+                    name = link.get_text().strip()
+                    if name and name not in cast_names:
+                        cast_names.append(name)
+                data["cast"] = ", ".join(cast_names) if cast_names else "N/A"
+            else:
+                data["cast"] = "N/A"
+            
+            # Language
+            lang_elem = soup.find('li', {'data-testid': 'title-details-languages'})
+            if lang_elem:
+                lang_links = lang_elem.find_all('a')
+                languages = [link.get_text().strip() for link in lang_links]
+                data["language"] = ", ".join(languages) if languages else "N/A"
+            else:
+                data["language"] = "N/A"
+            
+            # Determine type (movie/tv)
+            type_indicators = soup.find_all(string=re.compile(r'TV Series|TV Mini Series|TV Movie'))
+            if type_indicators:
+                data["type"] = "tv"
+                
+                # For TV shows, try to get season/episode info if available
+                episodes_elem = soup.find('span', string=re.compile(r'\d+ episodes'))
+                if episodes_elem:
+                    episodes_match = re.search(r'(\d+) episodes', episodes_elem)
+                    if episodes_match:
+                        data["episodes"] = episodes_match.group(1)
+            else:
+                data["type"] = "movie"
+            
+            # Poster image
+            poster_img = soup.find('img', {'data-testid': 'hero-media__poster'})
+            if poster_img:
+                poster_src = poster_img.get('src')
+                if poster_src:
+                    # Clean up IMDb image URL to get higher resolution
+                    poster_src = re.sub(r'UX\d+_CR\d+,\d+,\d+,\d+_AL_', 'UX500_CR0,0,500,750_AL_', poster_src)
+                    data["poster_url"] = poster_src
+            
+            # Cache the result
+            await cache_movie_data(cache_key, {"data": data})
+            return data
+            
+        except Exception as e:
+            logger.error(f"Error parsing IMDb data for {imdb_id}: {e}")
+            return None
+    
+    async def search_and_get_details(self, title: str, year: Optional[int] = None) -> Optional[Dict]:
+        """Search for a title and get its details in one call."""
+        imdb_id = await self.search_title(title, year)
+        if not imdb_id:
+            return None
+        
+        return await self.get_title_details(imdb_id)
+    
+    async def close(self):
+        """Close the aiohttp session."""
+        if self.session:
+            await self.session.close()
+
+# Global IMDb scraper instance
+imdb_scraper = IMDbScraper()
