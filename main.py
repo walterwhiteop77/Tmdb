@@ -50,15 +50,8 @@ async def main():
         # Start the bot
         logger.info("Starting bot...")
         
-        # Use webhook for deployment or polling for development
-        if SETTINGS.WEBHOOK_URL:
-            await app.run_webhook(
-                listen="0.0.0.0",
-                port=int(os.environ.get("PORT", 8000)),
-                webhook_url=SETTINGS.WEBHOOK_URL
-            )
-        else:
-            await app.run_polling(allowed_updates=Update.ALL_TYPES)
+        # Use polling for now (webhook can be configured later if needed)
+        await app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
             
     except Exception as e:
         logger.error(f"Error starting bot: {e}")
