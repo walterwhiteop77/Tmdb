@@ -126,7 +126,7 @@ class IMDbScraper:
             # Cache the result
             await cache_movie_data(cache_key, {"data": data})
             return data
-            
+
         except Exception as e:
             logger.error(f"Error parsing IMDb data for {imdb_id}: {e}")
             return None
