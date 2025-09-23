@@ -5,6 +5,7 @@ import aiohttp
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.constants import ChatAction
+from aiohttp import web
 
 # Configure logging
 logging.basicConfig(
@@ -112,10 +113,35 @@ async def handle_movie_search(update: Update, context: ContextTypes.DEFAULT_TYPE
         await msg.edit_text(f"❌ Search error: {str(e)[:100]}")
         logger.error(f"Search error: {e}")
 
+async def health_check(request):
+    """Health check endpoint for Render."""
+    return web.Response(text="Bot is running!", status=200)
+
+async def start_web_server():
+    """Start web server for Render health checks."""
+    app = web.Application()
+    app.router.add_get('/health', health_check)
+    app.router.add_get('/', health_check)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    port = int(os.environ.get("PORT", 8000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info(f"Web server started on port {port}")
+    return runner
+
 async def main():
     """Main function."""
+    web_runner = None
+    application = None
+    
     try:
-        # Create application
+        # Start web server for Render
+        web_runner = await start_web_server()
+        
+        # Create and configure application
         application = Application.builder().token(BOT_TOKEN).build()
         
         # Add handlers
@@ -124,11 +150,31 @@ async def main():
         
         logger.info("Starting bot...")
         
-        # Start polling
-        await application.run_polling(drop_pending_updates=True)
+        # Initialize and start polling
+        async with application:
+            await application.start()
+            await application.updater.start_polling(drop_pending_updates=True)
+            
+            # Keep running
+            await asyncio.Event().wait()
         
     except Exception as e:
         logger.error(f"Bot error: {e}")
+    finally:
+        # Cleanup
+        if application:
+            try:
+                await application.stop()
+            except:
+                pass
+        if web_runner:
+            try:
+                await web_runner.cleanup()
+            except:
+                pass
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped")
