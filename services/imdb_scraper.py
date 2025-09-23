@@ -60,14 +60,17 @@ class IMDbScraper:
         
         search_url = f"{self.base_url}/find?q={search_query}&ref_=nv_sr_sm"
         
+        logger.info(f"IMDb search URL: {search_url}")
         html = await self._make_request(search_url)
         if not html:
+            logger.error("Failed to get HTML from IMDb search")
             return None
         
         soup = BeautifulSoup(html, 'html.parser')
         
         # Look for title results
         results = soup.find_all('td', class_='result_text')
+        logger.info(f"Found {len(results)} IMDb search results")
         
         for result in results:
             link = result.find('a')
@@ -84,6 +87,7 @@ class IMDbScraper:
                 continue
             
             imdb_id = imdb_id.group(1)
+            logger.info(f"Found potential match: {imdb_id}")
             
             # Check if year matches (if provided)
             if year:
@@ -93,8 +97,10 @@ class IMDbScraper:
             
             # Cache the result
             await cache_movie_data(cache_key, {"imdb_id": imdb_id})
+            logger.info(f"Selected IMDb ID: {imdb_id}")
             return imdb_id
         
+        logger.warning(f"No IMDb results found for: {title}")
         return None
     
     async def get_title_details(self, imdb_id: str) -> Optional[Dict]:
