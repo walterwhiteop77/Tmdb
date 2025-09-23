@@ -48,118 +48,95 @@ async def handle_movie_request(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             return
         
-        # Get user configuration
-        config = await get_user_config(user.id)
+        logger.info(f"Parsed query - Title: {title}, Year: {year}, Season: {season}, Episode: {episode}")
         
         # Show searching message
         search_msg = await update.message.reply_text(
-            f"🔍 Searching for **{title}**{f' ({year})' if year else ''}"
-            f"{f' Season {season} Episode {episode}' if season and episode else ''}...",
+            f"🔍 Searching for **{title}**{f' ({year})' if year else ''}...",
             parse_mode='Markdown'
         )
         
-        # Try to fetch data from both sources
+        # Try TMDB first with detailed logging
         movie_data = None
         source = None
         
-        # First try TMDB (faster and more reliable)
         try:
+            logger.info(f"Starting TMDB search for: {title}")
             if season or episode:
+                logger.info("Searching as TV show")
                 movie_data = await tmdb_service.search_tv(title, year)
-                if movie_data and season and episode:
-                    # Get specific episode details
-                    detailed_data = await tmdb_service.get_tv_details(
-                        movie_data.get('tmdb_id'), season, episode
-                    )
-                    if detailed_data:
-                        movie_data = detailed_data
             else:
-                # Try movie first, then TV
+                logger.info("Searching as movie")
                 movie_data = await tmdb_service.search_movie(title, year)
-                if not movie_data:
-                    movie_data = await tmdb_service.search_tv(title, year)
             
             if movie_data:
                 source = "TMDB"
+                logger.info(f"TMDB search successful: {movie_data.get('title')}")
+            else:
+                logger.warning("TMDB search returned no data")
+                
         except Exception as e:
-            logger.error(f"TMDB search error: {e}")
+            logger.error(f"TMDB search failed with exception: {e}", exc_info=True)
+            await search_msg.edit_text(
+                f"🔍 TMDB error, trying IMDb for **{title}**...",
+                parse_mode='Markdown'
+            )
         
         # If TMDB failed, try IMDb
         if not movie_data:
             try:
+                logger.info(f"Starting IMDb search for: {title}")
                 await search_msg.edit_text(
-                    f"🔍 TMDB search failed, trying IMDb for **{title}**...",
+                    f"🔍 TMDB failed, trying IMDb for **{title}**...",
                     parse_mode='Markdown'
                 )
                 
                 movie_data = await imdb_scraper.search_and_get_details(title, year)
                 if movie_data:
                     source = "IMDb"
+                    logger.info(f"IMDb search successful: {movie_data.get('title')}")
+                else:
+                    logger.warning("IMDb search returned no data")
+                    
             except Exception as e:
-                logger.error(f"IMDb search error: {e}")
+                logger.error(f"IMDb search failed with exception: {e}", exc_info=True)
         
         if not movie_data:
+            logger.error(f"Both TMDB and IMDb searches failed for: {title}")
             await search_msg.edit_text(
-                f"❌ Sorry, I couldn't find **{title}**{f' ({year})' if year else ''} "
-                f"on either TMDB or IMDb.\n\n"
-                f"Please check the spelling or try a different format.",
+                f"❌ Sorry, I couldn't find **{title}**{f' ({year})' if year else ''} on either TMDB or IMDb.\n\n"
+                f"Please check the spelling or try a different format.\n\n"
+                f"**Debug info:** Check Render logs for detailed errors.",
                 parse_mode='Markdown'
             )
             return
         
-        # Update search message
-        await search_msg.edit_text(
-            f"✅ Found **{movie_data.get('title', 'Unknown')}** on {source}!\n"
-            f"🎨 Generating poster...",
-            parse_mode='Markdown'
-        )
+        logger.info(f"Movie data found from {source}: {movie_data.get('title')}")
         
-        # Send another typing action for poster generation
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_PHOTO)
+        # For now, just send the movie details without generating poster
+        # This helps us confirm the search is working
+        details_text = f"""
+✅ **Found on {source}!**
+
+🎬 **{movie_data.get('title', 'N/A')}**
+📅 **Year:** {movie_data.get('year', 'N/A')}
+⭐ **Rating:** {movie_data.get('rating', 'N/A')}/10
+🌐 **Language:** {movie_data.get('language', 'N/A')}
+🎭 **Genre:** {movie_data.get('genres', 'N/A')}
+👨‍🎬 **Director:** {movie_data.get('director', 'N/A')}
+📝 **Plot:** {movie_data.get('plot', 'N/A')[:200]}...
+
+_Poster generation temporarily disabled for testing._
+        """
         
-        # Generate poster
-        landscape_mode = config.get('landscape_mode', False)
-        caption_template = config.get('caption_template', SETTINGS.DEFAULT_CAPTION)
-        landscape_caption = config.get('landscape_caption', SETTINGS.DEFAULT_LANDSCAPE_CAPTION)
+        await search_msg.edit_text(details_text, parse_mode='Markdown')
         
-        poster_buffer = await poster_generator.generate_poster(
-            movie_data, 
-            caption_template,
-            landscape_mode,
-            landscape_caption
-        )
-        
-        if not poster_buffer:
-            await search_msg.edit_text(
-                f"✅ Found **{movie_data.get('title', 'Unknown')}** on {source}!\n"
-                f"❌ Failed to generate poster. Sending details as text.",
-                parse_mode='Markdown'
-            )
-            
-            # Send text details as fallback
-            details_text = _format_movie_details(movie_data, source)
-            await update.message.reply_text(details_text, parse_mode='Markdown')
-            return
-        
-        # Format caption for the photo
-        photo_caption = _format_movie_details(movie_data, source)
-        
-        # Send poster
-        await update.message.reply_photo(
-            photo=poster_buffer,
-            caption=photo_caption,
-            parse_mode='Markdown'
-        )
-        
-        # Delete the search message
-        await search_msg.delete()
-        
-        logger.info(f"Successfully generated poster for {title} from {source}")
+        logger.info(f"Successfully processed request for {title}")
         
     except Exception as e:
-        logger.error(f"Error handling movie request: {e}")
+        logger.error(f"Error in handle_movie_request: {e}", exc_info=True)
         await update.message.reply_text(
-            f"❌ An error occurred while processing your request:\n`{str(e)}`",
+            f"❌ An error occurred while processing your request:\n`{str(e)[:100]}`\n\nCheck Render logs for details.",
             parse_mode='Markdown'
         )
 
