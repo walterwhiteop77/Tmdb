@@ -35,8 +35,7 @@ class Database:
         try:
             # Create indexes for efficient queries
             await self.db.configs.create_index("user_id", unique=True)
-            await self.db.movie_cache.create_index("imdb_id", unique=True)
-            await self.db.movie_cache.create_index("tmdb_id", unique=True)
+            await self.db.movie_cache.create_index("key", unique=True)  # Use 'key' instead of 'imdb_id'
             await self.db.movie_cache.create_index([("created_at", 1)], expireAfterSeconds=86400)  # 24h TTL
             
             logger.info("Database indexes created successfully")
