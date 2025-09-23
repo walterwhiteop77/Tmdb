@@ -1,18 +1,10 @@
 import os
 import asyncio
 import logging
+import aiohttp
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from aiohttp import web
-import signal
-import sys
-
-from config.settings import SETTINGS
-from config.database import init_database
-from handlers.commands import start, help_command, status
-from handlers.admin import set_caption, set_landscape, set_landscape_caption, view_templates
-from handlers.movies import handle_movie_request
-from utils.decorators import admin_only
+from telegram.constants import ChatAction
 
 # Configure logging
 logging.basicConfig(
@@ -21,135 +13,122 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class BotRunner:
-    def __init__(self):
-        self.application = None
-        self.web_runner = None
-        self.running = False
+# Settings
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+TMDB_API_KEY = os.getenv("TMDB_API_KEY")
+ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
 
-    async def health_check(self, request):
-        """Health check endpoint for Render."""
-        return web.Response(text="Bot is running!", status=200)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command."""
+    if update.effective_user.id != ADMIN_USER_ID:
+        await update.message.reply_text("❌ Admin only bot")
+        return
+    
+    await update.message.reply_text("""
+🎬 **Movie Bot Working!**
 
-    async def start_web_server(self):
-        """Start a simple web server for health checks."""
-        app = web.Application()
-        app.router.add_get('/health', self.health_check)
-        app.router.add_get('/', self.health_check)
-        
-        runner = web.AppRunner(app)
-        await runner.setup()
-        
-        port = int(os.environ.get("PORT", 8000))
-        site = web.TCPSite(runner, "0.0.0.0", port)
-        await site.start()
-        logger.info(f"Web server started on port {port}")
-        
-        return runner
+Commands:
+• Just type a movie name (e.g., "Iron Man")
+• /start - This message
 
-    async def setup_bot(self):
-        """Set up the bot application."""
-        # Create application
-        self.application = Application.builder().token(SETTINGS.BOT_TOKEN).build()
-        
-        # Command handlers
-        self.application.add_handler(CommandHandler("start", start))
-        self.application.add_handler(CommandHandler("help", help_command))
-        self.application.add_handler(CommandHandler("status", admin_only(status)))
-        
-        # Admin command handlers
-        self.application.add_handler(CommandHandler("setcaption", admin_only(set_caption)))
-        self.application.add_handler(CommandHandler("landscape", admin_only(set_landscape)))
-        self.application.add_handler(CommandHandler("setlandcaption", admin_only(set_landscape_caption)))
-        self.application.add_handler(CommandHandler("template", admin_only(view_templates)))
-        
-        # Message handler for movie/TV show requests
-        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_movie_request))
-        
-        # Error handler
-        async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            logger.error(f"Update {update} caused error {context.error}")
-        
-        self.application.add_error_handler(error_handler)
+Status: Ready to search movies!
+    """)
 
-    async def start(self):
-        """Start the bot and web server."""
-        try:
-            # Initialize database
-            await init_database()
-            
-            # Start web server for health checks
-            self.web_runner = await self.start_web_server()
-            
-            # Setup bot
-            await self.setup_bot()
-            
-            # Start the bot
-            logger.info("Starting bot...")
-            self.running = True
-            
-            # Initialize the application
-            await self.application.initialize()
-            await self.application.start()
-            
-            # Start the updater
-            await self.application.updater.start_polling(drop_pending_updates=True)
-            
-            # Keep running until stopped
-            while self.running:
-                await asyncio.sleep(1)
-            
-        except Exception as e:
-            logger.error(f"Error starting bot: {e}")
-            await self.cleanup()
-            raise
-
-    async def cleanup(self):
-        """Cleanup resources."""
-        logger.info("Cleaning up...")
-        self.running = False
+async def handle_movie_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle movie search requests."""
+    if update.effective_user.id != ADMIN_USER_ID:
+        await update.message.reply_text("❌ Admin only")
+        return
+    
+    title = update.message.text.strip()
+    if not title:
+        return
+    
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    
+    msg = await update.message.reply_text(f"🔍 Searching for: {title}")
+    
+    try:
+        # Direct TMDB API call
+        url = f"https://api.themoviedb.org/3/search/movie"
+        params = {
+            "api_key": TMDB_API_KEY,
+            "query": title
+        }
         
-        if self.application:
-            try:
-                if self.application.updater.running:
-                    await self.application.updater.stop()
-                await self.application.stop()
-                await self.application.shutdown()
-            except Exception as e:
-                logger.error(f"Error stopping application: {e}")
+        logger.info(f"Searching TMDB for: {title}")
         
-        if self.web_runner:
-            try:
-                await self.web_runner.cleanup()
-            except Exception as e:
-                logger.error(f"Error cleaning up web runner: {e}")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=params) as response:
+                logger.info(f"TMDB response status: {response.status}")
+                
+                if response.status == 200:
+                    data = await response.json()
+                    results = data.get('results', [])
+                    
+                    logger.info(f"TMDB found {len(results)} results")
+                    
+                    if results:
+                        movie = results[0]
+                        
+                        # Get detailed info
+                        movie_id = movie['id']
+                        detail_url = f"https://api.themoviedb.org/3/movie/{movie_id}"
+                        detail_params = {"api_key": TMDB_API_KEY}
+                        
+                        async with session.get(detail_url, params=detail_params) as detail_response:
+                            if detail_response.status == 200:
+                                details = await detail_response.json()
+                                
+                                result_text = f"""✅ **Found: {details.get('title', 'Unknown')}**
 
-    def signal_handler(self, signum, frame):
-        """Handle shutdown signals."""
-        logger.info(f"Received signal {signum}")
-        self.running = False
+📅 **Year:** {details.get('release_date', 'Unknown')[:4] if details.get('release_date') else 'Unknown'}
+⭐ **Rating:** {details.get('vote_average', 'N/A')}/10
+🌐 **Language:** {details.get('original_language', 'Unknown').upper()}
+🎭 **Genres:** {', '.join([g['name'] for g in details.get('genres', [])])}
+⏱️ **Runtime:** {details.get('runtime', 'Unknown')} min
+
+📝 **Plot:** {details.get('overview', 'No plot available')[:300]}...
+
+🔍 **Source:** TMDB
+                                """
+                                
+                                await msg.edit_text(result_text)
+                                logger.info(f"Successfully found: {details.get('title')}")
+                            else:
+                                await msg.edit_text(f"✅ Found movie but couldn't get details")
+                    else:
+                        await msg.edit_text(f"❌ No results found for '{title}' on TMDB")
+                        
+                elif response.status == 401:
+                    await msg.edit_text("❌ TMDB API Key is invalid!")
+                    logger.error("Invalid TMDB API key")
+                else:
+                    error_text = await response.text()
+                    await msg.edit_text(f"❌ TMDB API Error {response.status}")
+                    logger.error(f"TMDB API error {response.status}: {error_text}")
+                    
+    except Exception as e:
+        await msg.edit_text(f"❌ Search error: {str(e)[:100]}")
+        logger.error(f"Search error: {e}")
 
 async def main():
     """Main function."""
-    bot_runner = BotRunner()
-    
-    # Set up signal handlers
-    signal.signal(signal.SIGTERM, bot_runner.signal_handler)
-    signal.signal(signal.SIGINT, bot_runner.signal_handler)
-    
     try:
-        await bot_runner.start()
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
+        # Create application
+        application = Application.builder().token(BOT_TOKEN).build()
+        
+        # Add handlers
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_movie_search))
+        
+        logger.info("Starting bot...")
+        
+        # Start polling
+        await application.run_polling(drop_pending_updates=True)
+        
     except Exception as e:
-        logger.error(f"Bot crashed: {e}")
-    finally:
-        await bot_runner.cleanup()
+        logger.error(f"Bot error: {e}")
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Bot stopped")
-    except Exception as e:
-        logger.error(f"Failed to start bot: {e}")
+    asyncio.run(main())
