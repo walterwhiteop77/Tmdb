@@ -198,40 +198,110 @@ async def debug_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         from services.tmdb_api import tmdb_service
         from services.imdb_scraper import imdb_scraper
+        from config.settings import SETTINGS
         
-        debug_msg = await update.message.reply_text(f"🔍 **Debug Search for: {title}**\n\n🔄 Testing TMDB...")
+        debug_msg = await update.message.reply_text(f"🔍 **Debug Search for: {title}**\n\n🔄 Starting tests...")
+        
+        # Check TMDB API Key
+        api_key_status = "✅ Set" if SETTINGS.TMDB_API_KEY else "❌ Missing"
+        await debug_msg.edit_text(
+            f"🔍 **Debug Search for: {title}**\n\n🔑 TMDB API Key: {api_key_status}\n🔄 Testing TMDB..."
+        )
         
         # Test TMDB
+        tmdb_status = "❌ Failed"
+        tmdb_error = ""
         try:
-            tmdb_result = await tmdb_service.search_movie(title)
-            if tmdb_result:
-                debug_msg = await debug_msg.edit_text(
-                    f"🔍 **Debug Search for: {title}**\n\n✅ TMDB: Found '{tmdb_result.get('title')}'\n🔄 Testing IMDb..."
-                )
-            else:
-                debug_msg = await debug_msg.edit_text(
-                    f"🔍 **Debug Search for: {title}**\n\n❌ TMDB: No results\n🔄 Testing IMDb..."
-                )
-        except Exception as e:
-            debug_msg = await debug_msg.edit_text(
-                f"🔍 **Debug Search for: {title}**\n\n❌ TMDB Error: {str(e)[:100]}\n🔄 Testing IMDb..."
+            # Test basic TMDB connection first
+            session = await tmdb_service._get_session()
+            test_url = f"{SETTINGS.TMDB_BASE_URL}/movie/popular?api_key={SETTINGS.TMDB_API_KEY}"
+            
+            async with session.get(test_url) as response:
+                if response.status == 200:
+                    tmdb_status = "✅ API Connected"
+                elif response.status == 401:
+                    tmdb_status = "❌ Invalid API Key"
+                else:
+                    tmdb_status = f"❌ API Error {response.status}"
+                    
+            await debug_msg.edit_text(
+                f"🔍 **Debug Search for: {title}**\n\n🔑 TMDB API Key: {api_key_status}\n🌐 TMDB Connection: {tmdb_status}\n🔄 Searching TMDB..."
             )
+            
+            # Now try the actual search
+            if tmdb_status.startswith("✅"):
+                tmdb_result = await tmdb_service.search_movie(title)
+                if tmdb_result:
+                    tmdb_status = f"✅ Found: {tmdb_result.get('title', 'Unknown')}"
+                else:
+                    tmdb_status = "❌ No results"
+            
+        except Exception as e:
+            tmdb_error = str(e)[:100]
+            tmdb_status = f"❌ Error: {tmdb_error}"
+        
+        await debug_msg.edit_text(
+            f"🔍 **Debug Search for: {title}**\n\n🔑 TMDB API Key: {api_key_status}\n🌐 TMDB: {tmdb_status}\n🔄 Testing IMDb..."
+        )
         
         # Test IMDb
+        imdb_status = "❌ Failed"
         try:
-            imdb_result = await imdb_scraper.search_and_get_details(title)
-            if imdb_result:
-                await debug_msg.edit_text(
-                    f"🔍 **Debug Search for: {title}**\n\n✅ TMDB: {'Found' if tmdb_result else 'Not found'}\n✅ IMDb: Found '{imdb_result.get('title')}'"
-                )
+            # Test basic IMDb connection
+            test_html = await imdb_scraper._make_request("https://www.imdb.com")
+            if test_html and "IMDb" in test_html:
+                imdb_status = "✅ Site accessible"
+                
+                # Try the search
+                imdb_result = await imdb_scraper.search_and_get_details(title)
+                if imdb_result:
+                    imdb_status = f"✅ Found: {imdb_result.get('title', 'Unknown')}"
+                else:
+                    imdb_status = "❌ No results"
             else:
-                await debug_msg.edit_text(
-                    f"🔍 **Debug Search for: {title}**\n\n✅ TMDB: {'Found' if tmdb_result else 'Not found'}\n❌ IMDb: No results"
-                )
+                imdb_status = "❌ Site inaccessible"
+                
         except Exception as e:
-            await debug_msg.edit_text(
-                f"🔍 **Debug Search for: {title}**\n\n✅ TMDB: {'Found' if tmdb_result else 'Not found'}\n❌ IMDb Error: {str(e)[:100]}"
-            )
+            imdb_status = f"❌ Error: {str(e)[:50]}"
+        
+        # Final result
+        await debug_msg.edit_text(
+            f"🔍 **Debug Search for: {title}**\n\n"
+            f"🔑 TMDB API Key: {api_key_status}\n"
+            f"🌐 TMDB: {tmdb_status}\n"
+            f"🌐 IMDb: {imdb_status}\n\n"
+            f"**Next Steps:**\n"
+            f"• Check TMDB API key if connection failed\n"
+            f"• Try simpler titles like 'Matrix' or 'Avatar'\n"
+            f"• Check Render logs for detailed errors"
+        )
             
     except Exception as e:
         await update.message.reply_text(f"Debug error: {str(e)}")
+
+async def test_tmdb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Test TMDB API directly."""
+    try:
+        from services.tmdb_api import tmdb_service
+        from config.settings import SETTINGS
+        
+        # Test with a known movie ID
+        result = await tmdb_service.get_movie_details(299536)  # Avengers: Infinity War
+        
+        if result:
+            await update.message.reply_text(
+                f"✅ TMDB API Working!\n\n"
+                f"**Test Movie:** {result.get('title')}\n"
+                f"**Year:** {result.get('year')}\n"
+                f"**Rating:** {result.get('rating')}\n\n"
+                f"Search should work now. Try a movie title!"
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ TMDB API Test Failed\n\n"
+                f"API Key: {'Set' if SETTINGS.TMDB_API_KEY else 'Missing'}\n"
+                f"Check your TMDB_API_KEY environment variable."
+            )
+            
+    except Exception as e:
+        await update.message.reply_text(f"TMDB test error: {str(e)}")
