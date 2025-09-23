@@ -186,3 +186,52 @@ async def view_templates(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"❌ Error retrieving templates: {str(e)}"
         )
+
+async def debug_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /debug command - test search functionality."""
+    if not context.args:
+        await update.message.reply_text("Usage: /debug <movie title>")
+        return
+    
+    title = " ".join(context.args)
+    
+    try:
+        from services.tmdb_api import tmdb_service
+        from services.imdb_scraper import imdb_scraper
+        
+        debug_msg = await update.message.reply_text(f"🔍 **Debug Search for: {title}**\n\n🔄 Testing TMDB...")
+        
+        # Test TMDB
+        try:
+            tmdb_result = await tmdb_service.search_movie(title)
+            if tmdb_result:
+                debug_msg = await debug_msg.edit_text(
+                    f"🔍 **Debug Search for: {title}**\n\n✅ TMDB: Found '{tmdb_result.get('title')}'\n🔄 Testing IMDb..."
+                )
+            else:
+                debug_msg = await debug_msg.edit_text(
+                    f"🔍 **Debug Search for: {title}**\n\n❌ TMDB: No results\n🔄 Testing IMDb..."
+                )
+        except Exception as e:
+            debug_msg = await debug_msg.edit_text(
+                f"🔍 **Debug Search for: {title}**\n\n❌ TMDB Error: {str(e)[:100]}\n🔄 Testing IMDb..."
+            )
+        
+        # Test IMDb
+        try:
+            imdb_result = await imdb_scraper.search_and_get_details(title)
+            if imdb_result:
+                await debug_msg.edit_text(
+                    f"🔍 **Debug Search for: {title}**\n\n✅ TMDB: {'Found' if tmdb_result else 'Not found'}\n✅ IMDb: Found '{imdb_result.get('title')}'"
+                )
+            else:
+                await debug_msg.edit_text(
+                    f"🔍 **Debug Search for: {title}**\n\n✅ TMDB: {'Found' if tmdb_result else 'Not found'}\n❌ IMDb: No results"
+                )
+        except Exception as e:
+            await debug_msg.edit_text(
+                f"🔍 **Debug Search for: {title}**\n\n✅ TMDB: {'Found' if tmdb_result else 'Not found'}\n❌ IMDb Error: {str(e)[:100]}"
+            )
+            
+    except Exception as e:
+        await update.message.reply_text(f"Debug error: {str(e)}")
