@@ -34,11 +34,15 @@ class TMDBService:
         url = f"{self.base_url}/{endpoint}"
         
         try:
+            logger.info(f"Making TMDB request to: {endpoint} with params: {params}")
             async with session.get(url, params=default_params) as response:
                 if response.status == 200:
-                    return await response.json()
+                    data = await response.json()
+                    logger.info(f"TMDB response: {data.get('total_results', 0)} results")
+                    return data
                 else:
-                    logger.error(f"TMDB API error: {response.status} - {await response.text()}")
+                    error_text = await response.text()
+                    logger.error(f"TMDB API error: {response.status} - {error_text}")
                     return None
         except Exception as e:
             logger.error(f"Error making TMDB request: {e}")
