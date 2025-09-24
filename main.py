@@ -43,9 +43,12 @@ async def admin_only(func):
         return await func(update, context)
     return wrapper
 
-@admin_only
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command."""
+    if update.effective_user.id != ADMIN_USER_ID:
+        await update.message.reply_text("❌ Admin only bot")
+        return
+    
     await update.message.reply_text("""
 🎬 **IMDb-TMDB Poster Bot**
 
@@ -62,9 +65,12 @@ Just send a movie name: `Iron Man`, `Avatar`, etc.
 `{title}`, `{year}`, `{rating}`, `{language}`, `{genres}`, `{director}`, `{plot}`
     """)
 
-@admin_only
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /help command."""
+    if update.effective_user.id != ADMIN_USER_ID:
+        await update.message.reply_text("❌ Admin only bot")
+        return
+        
     await update.message.reply_text("""
 🎬 **Bot Commands**
 
@@ -85,9 +91,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Just type movie names: `Iron Man`, `Matrix`, `Breaking Bad S01E01`
     """)
 
-@admin_only
 async def set_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /setcaption command."""
+    if update.effective_user.id != ADMIN_USER_ID:
+        await update.message.reply_text("❌ Admin only bot")
+        return
+        
     if not context.args:
         await update.message.reply_text(
             "❌ Please provide a caption template.\n\n"
@@ -102,9 +111,12 @@ async def set_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ **Caption template updated!**\n\n```\n{template}\n```"
     )
 
-@admin_only
 async def set_landscape(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /landscape command."""
+    if update.effective_user.id != ADMIN_USER_ID:
+        await update.message.reply_text("❌ Admin only bot")
+        return
+        
     if not context.args or context.args[0].lower() not in ['on', 'off']:
         await update.message.reply_text("Usage: `/landscape on` or `/landscape off`")
         return
@@ -115,9 +127,12 @@ async def set_landscape(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status = "enabled" if landscape_mode else "disabled"
     await update.message.reply_text(f"✅ Landscape mode {status}!")
 
-@admin_only
 async def view_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /template command."""
+    if update.effective_user.id != ADMIN_USER_ID:
+        await update.message.reply_text("❌ Admin only bot")
+        return
+        
     landscape_status = "🖼️ Enabled" if user_settings["landscape_mode"] else "📱 Disabled"
     
     await update.message.reply_text(f"""
@@ -145,71 +160,32 @@ async def download_image(url: str) -> Image.Image:
                 return Image.open(io.BytesIO(image_data))
     return None
 
-def create_poster_with_caption(image: Image.Image, caption_text: str, landscape_mode: bool = False) -> io.BytesIO:
-    """Create poster with caption."""
+def create_clean_poster(image: Image.Image, landscape_mode: bool = False) -> io.BytesIO:
+    """Create clean poster without caption burned in."""
     try:
         if image.mode != 'RGB':
             image = image.convert('RGB')
         
         if landscape_mode:
-            # For landscape, overlay caption on image
-            draw = ImageDraw.Draw(image)
-            font_size = 24
-            try:
-                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
-            except:
-                font = ImageFont.load_default()
+            # For landscape mode, try to get backdrop image or crop to landscape ratio
+            width, height = image.size
+            target_ratio = 16 / 9
+            current_ratio = width / height
             
-            # Add semi-transparent background
-            overlay = Image.new('RGBA', image.size, (0, 0, 0, 0))
-            overlay_draw = ImageDraw.Draw(overlay)
-            
-            text_bbox = overlay_draw.textbbox((0, 0), caption_text, font=font)
-            text_height = text_bbox[3] - text_bbox[1]
-            
-            # Draw background rectangle
-            overlay_draw.rectangle(
-                [(0, image.height - text_height - 20), (image.width, image.height)],
-                fill=(0, 0, 0, 180)
-            )
-            
-            # Composite overlay
-            image = Image.alpha_composite(image.convert('RGBA'), overlay).convert('RGB')
-            
-            # Draw text
-            draw = ImageDraw.Draw(image)
-            draw.text((10, image.height - text_height - 10), caption_text, font=font, fill="white")
-            
-            final_image = image
-        else:
-            # For portrait, add caption below image
-            font_size = 20
-            try:
-                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
-            except:
-                font = ImageFont.load_default()
-            
-            # Calculate caption height
-            lines = caption_text.split('\n')
-            line_height = 25
-            caption_height = len(lines) * line_height + 40
-            
-            # Create new image
-            total_height = image.height + caption_height
-            final_image = Image.new('RGB', (image.width, total_height), color='black')
-            final_image.paste(image, (0, 0))
-            
-            # Draw caption
-            draw = ImageDraw.Draw(final_image)
-            y_offset = image.height + 20
-            
-            for line in lines:
-                draw.text((20, y_offset), line, font=font, fill="white")
-                y_offset += line_height
+            if current_ratio < target_ratio:
+                # Too tall, crop height
+                new_height = int(width / target_ratio)
+                top = (height - new_height) // 2
+                image = image.crop((0, top, width, top + new_height))
+            elif current_ratio > target_ratio:
+                # Too wide, crop width  
+                new_width = int(height * target_ratio)
+                left = (width - new_width) // 2
+                image = image.crop((left, 0, left + new_width, height))
         
-        # Save to BytesIO
+        # Save clean image
         output = io.BytesIO()
-        final_image.save(output, format='JPEG', quality=95)
+        image.save(output, format='JPEG', quality=95)
         output.seek(0)
         return output
         
@@ -262,31 +238,48 @@ async def handle_movie_search(update: Update, context: ContextTypes.DEFAULT_TYPE
                                     "language": details.get('original_language', 'Unknown').upper(),
                                     "genres": ', '.join([g['name'] for g in details.get('genres', [])]),
                                     "director": "N/A",  # Would need credits API call
-                                    "plot": details.get('overview', 'No plot available')[:200] + "..."
+                                    "plot": details.get('overview', 'No plot available')[:300] + "..." if details.get('overview') else "No plot available"
                                 }
                                 
                                 await msg.edit_text("✅ Found! Generating poster...")
                                 await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_PHOTO)
                                 
-                                # Download poster image
-                                poster_url = f"https://image.tmdb.org/t/p/w500{details.get('poster_path')}"
-                                image = await download_image(poster_url)
+                                # Choose image based on mode
+                                if user_settings["landscape_mode"] and details.get('backdrop_path'):
+                                    # Use backdrop for landscape
+                                    image_url = f"https://image.tmdb.org/t/p/w1280{details.get('backdrop_path')}"
+                                    image_type = "backdrop"
+                                else:
+                                    # Use poster for portrait
+                                    image_url = f"https://image.tmdb.org/t/p/w500{details.get('poster_path')}"
+                                    image_type = "poster"
+                                
+                                logger.info(f"Downloading {image_type} from: {image_url}")
+                                image = await download_image(image_url)
                                 
                                 if image:
-                                    # Format caption
-                                    template = user_settings["landscape_caption"] if user_settings["landscape_mode"] else user_settings["caption_template"]
-                                    caption = template.format(**movie_data)
-                                    
-                                    # Create poster
-                                    poster_buffer = create_poster_with_caption(image, caption, user_settings["landscape_mode"])
+                                    # Create clean poster (no caption burned in)
+                                    poster_buffer = create_clean_poster(image, user_settings["landscape_mode"])
                                     
                                     if poster_buffer:
-                                        # Send poster
+                                        # Format caption for Telegram message
+                                        if user_settings["landscape_mode"]:
+                                            template = user_settings["landscape_caption"]
+                                        else:
+                                            template = user_settings["caption_template"]
+                                        
+                                        telegram_caption = template.format(**movie_data)
+                                        
+                                        # Send poster with caption in Telegram message
                                         await update.message.reply_photo(
                                             photo=poster_buffer,
-                                            caption=f"🎬 **{movie_data['title']}** ({movie_data['year']})\n🔍 Source: TMDB"
+                                            caption=telegram_caption,
+                                            parse_mode='Markdown'
                                         )
                                         await msg.delete()
+                                        
+                                        mode_info = "🖼️ Landscape" if user_settings["landscape_mode"] else "📱 Portrait"
+                                        logger.info(f"Successfully sent {mode_info} poster for: {movie_data['title']}")
                                     else:
                                         await msg.edit_text("❌ Failed to generate poster")
                                 else:
